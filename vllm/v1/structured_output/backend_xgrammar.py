@@ -171,7 +171,9 @@ class XgrammarGrammar(StructuredOutputGrammar):
                 )
                 return False
             self.num_processed_tokens += 1
-        self._is_terminated = self.matcher.is_terminated()
+            self._is_terminated = self.matcher.is_terminated()
+            if self._is_terminated:
+                break
         return True
 
     def validate_tokens(self, tokens: list[int]) -> list[int]:
@@ -184,6 +186,8 @@ class XgrammarGrammar(StructuredOutputGrammar):
         for token in tokens:
             if self.matcher.accept_token(token):
                 accepted_tokens.append(token)
+                if self.matcher.is_terminated():
+                    break
             else:
                 break
         if len(accepted_tokens) > 0:
@@ -204,6 +208,7 @@ class XgrammarGrammar(StructuredOutputGrammar):
 
     def reset(self):
         self.num_processed_tokens = 0
+        self._is_terminated = False
         self.matcher.reset()
 
 

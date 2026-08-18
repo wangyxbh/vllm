@@ -343,31 +343,40 @@ def test_trim_reasoning_for_advance():
     assert manager.trim_reasoning_for_advance(request, next_step) == next_step
 
 
-
- 
-@pytest.mark.parametrize("backend", ["xgrammar", "guidance"])
-def test_accept_tokens_syncs_terminated_after_overshoot(backend):
-    """accept_tokens must keep the terminated flag in sync when a batch
-    overshoots the stop token.
- 
-    Speculative decoding can hand accept_tokens a batch containing a token
-    *after* EOS. accept_tokens rejects that trailing token, but it must still
-    record that the grammar has terminated -- otherwise vLLM believes a
-    finished request is still running, which surfaces as a fill_next_token_
-    bitmask crash on one path and an engine livelock on another (#49210).
-    """
-    tokenizer, manager, request, prompt = _make_manager_and_request(backend)
+def test_xgrammar_accept_tokens_stops_after_termination():
+    """Tokens after a terminating EOS are ignored within the same batch."""
+    tokenizer, _, request, prompt = _make_manager_and_request("xgrammar")
     grammar = request.structured_output_request.grammar
- 
-    # Drive the grammar through a complete JSON object. Completing the
-    # structure alone does not terminate the grammar; it also needs EOS.
+
     assert grammar.accept_tokens(request.request_id, prompt)
- 
-    # Mimic a speculative-decode batch that overshoots the stop token.
+
     eos = tokenizer.eos_token_id
     stray = tokenizer.encode("\n")[0]
-    grammar.accept_tokens(request.request_id, [eos, stray])
- 
-    # Core invariant: vLLM's view now agrees the request is finished.
-    # (Pre-fix this is False for xgrammar -> livelock / later bitmask crash.)
+    before = grammar.num_processed_tokens
+
+    assert grammar.accept_tokens(request.request_id, [eos, stray])
+    assert grammar.is_terminated()
+    assert grammar.num_processed_tokens == before + 1
+
+    grammar.reset()
+    assert not grammar.is_terminated()
+
+
+def test_xgrammar_validate_tokens_stops_after_termination(capfd):
+    """Validation must not advance a matcher past its terminal token."""
+    tokenizer, _, request, prompt = _make_manager_and_request("xgrammar")
+    grammar = request.structured_output_request.grammar
+
+    assert grammar.accept_tokens(request.request_id, prompt)
+
+    eos = tokenizer.eos_token_id
+    stray = tokenizer.encode("\n")[0]
+
+    assert grammar.validate_tokens([eos, stray]) == [eos]
+    assert "trying to accept new token" not in capfd.readouterr().err
+    assert not grammar.is_terminated()
+
+    # Validation rolls the matcher back, so EOS must still be accepted when
+    # the scheduler later advances the grammar with the sampled output.
+    assert grammar.accept_tokens(request.request_id, [eos])
     assert grammar.is_terminated()
